@@ -3,9 +3,36 @@
 
 #include <limits>
 #include <memory>
+#include <random>
+#include <unordered_map>
 
 int main() {
     Suite suite;
+    suite.add("hash table resolves collisions and retains references through growth", [] {
+        struct Collision { std::size_t operator()(const std::string&) const { return 0; } };
+        taskflow::ds::HashTable<std::unique_ptr<int>, Collision> table;
+        auto* address = &table.insert("first", std::make_unique<int>(7));
+        for (int i = 0; i < 3000; ++i) table.insert(std::to_string(i), std::make_unique<int>(i));
+        require(table.find("first") == address && **address == 7, "rehash invalidated value");
+        for (int i = 0; i < 3000; ++i) require(**table.find(std::to_string(i)) == i, "collision lost key");
+        throws<std::invalid_argument>([&] { table.insert("first", std::make_unique<int>(9)); });
+        auto moved = std::move(table);
+        table.insert("reuse", std::make_unique<int>(1));
+        require(moved.size() == 3001 && table.size() == 1, "move lost table ownership");
+        moved.clear();
+        require(!moved.find("first"), "clear retained key");
+    });
+    suite.add("hash lookup agrees with a standard reference map", [] {
+        taskflow::ds::HashTable<int> actual;
+        std::unordered_map<std::string, int> expected;
+        std::mt19937 random(17);
+        for (int i = 0; i < 10000; ++i) {
+            const auto key = std::to_string(random() % 2000);
+            if (expected.emplace(key, i).second) actual.insert(key, i);
+            require(actual.find(key) && *actual.find(key) == expected.at(key), "lookup mismatch");
+        }
+        require(actual.size() == expected.size() && !actual.find("missing"), "wrong map size");
+    });
     suite.add("queue preserves FIFO and can be reused after draining", [] {
         taskflow::ds::LinkedQueue<int> queue;
         for (int i = 0; i < 1000; ++i) queue.push(i);
