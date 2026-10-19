@@ -1,0 +1,3 @@
+build/
+*.snapshot
+*.snapshot.tmp

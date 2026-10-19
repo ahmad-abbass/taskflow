@@ -1,0 +1,8 @@
+add totals 3 sum "12 8 -2" "Add a small batch"
+add notes 9 count "OOP and data structures work together" "Count words"
+add unused 0 count "This task will be cancelled"
+cancel unused
+next
+run
+list
+quit
