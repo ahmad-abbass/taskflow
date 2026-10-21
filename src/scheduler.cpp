@@ -6,6 +6,81 @@
 
 namespace taskflow {
 
+namespace {
+bool pending(TaskState state) { return state == TaskState::Ready || state == TaskState::Waiting; }
+bool unsuccessful(TaskState state) {
+    return state == TaskState::Failed || state == TaskState::Cancelled || state == TaskState::Blocked;
+}
+}
+
+bool Scheduler::reaches(Task& from, Task& target) const {
+    ds::LinkedQueue<Task*> queue;
+    ds::HashTable<bool> seen;
+    queue.push(&from);
+    seen.insert(from.id_, true);
+    while (!queue.empty()) {
+        const auto* task = queue.pop();
+        if (task == &target) return true;
+        for (auto* dependent : task->dependents_) {
+            if (!seen.find(dependent->id_)) { seen.insert(dependent->id_, true); queue.push(dependent); }
+        }
+    }
+    return false;
+}
+
+void Scheduler::blockDependents(Task& task) {
+    ds::LinkedQueue<Task*> queue;
+    queue.push(&task);
+    while (!queue.empty()) {
+        auto* source = queue.pop();
+        for (auto* child : source->dependents_) {
+            if (!pending(child->state_)) continue;
+            child->state_ = TaskState::Blocked;
+            child->result_ = "prerequisite " + source->id_ + " did not succeed";
+            ++child->readyVersion_;
+            queue.push(child);
+        }
+    }
+}
+
+void Scheduler::refresh(Task& task) {
+    if (!pending(task.state_)) return;
+    bool ready = true;
+    for (const auto* prerequisite : task.prerequisites_) {
+        if (unsuccessful(prerequisite->state_)) {
+            task.state_ = TaskState::Blocked;
+            task.result_ = "prerequisite " + prerequisite->id_ + " did not succeed";
+            ++task.readyVersion_;
+            blockDependents(task);
+            return;
+        }
+        if (prerequisite->state_ != TaskState::Succeeded) ready = false;
+    }
+    if (ready && task.state_ != TaskState::Ready) enqueue(task);
+    else if (!ready && task.state_ == TaskState::Ready) {
+        task.state_ = TaskState::Waiting;
+        ++task.readyVersion_;
+    }
+}
+
+void Scheduler::addDependency(const std::string& id, const std::string& prerequisiteId) {
+    auto* task = tasks_.find(id);
+    auto* prerequisite = tasks_.find(prerequisiteId);
+    if (!task || !prerequisite) throw std::invalid_argument("dependency task not found");
+    if (!pending(task->state_)) throw std::logic_error("only pending tasks accept dependencies");
+    for (const auto* existing : task->prerequisites_) if (existing == prerequisite) return;
+    if (reaches(*task, *prerequisite)) throw std::invalid_argument("dependency would create a cycle");
+    if (edgeCount_ >= 1000000) throw std::length_error("dependency limit reached");
+    if (task->prerequisites_.size() == task->prerequisites_.capacity())
+        task->prerequisites_.reserve(task->prerequisites_.capacity() ? task->prerequisites_.capacity() * 2 : 4);
+    if (prerequisite->dependents_.size() == prerequisite->dependents_.capacity())
+        prerequisite->dependents_.reserve(prerequisite->dependents_.capacity() ? prerequisite->dependents_.capacity() * 2 : 4);
+    task->prerequisites_.push_back(prerequisite);
+    prerequisite->dependents_.push_back(task);
+    ++edgeCount_;
+    refresh(*task);
+}
+
 void Scheduler::enqueue(Task& task) {
     task.readySequence_ = nextSequence_++;
     ++task.readyVersion_;
@@ -45,8 +120,9 @@ void Scheduler::cancel(const std::string& id) {
     Task* task = tasks_.find(id);
     if (!task) throw std::invalid_argument("task not found");
     if (task->state_ == TaskState::Cancelled) return;
-    if (task->state_ != TaskState::Ready) throw std::logic_error("only pending tasks can be cancelled");
+    if (!pending(task->state_)) throw std::logic_error("only pending tasks can be cancelled");
     task->state_ = TaskState::Cancelled;
+    blockDependents(*task);
 }
 
 std::optional<std::string> Scheduler::runNext() {
@@ -61,6 +137,8 @@ std::optional<std::string> Scheduler::runNext() {
         catch (const std::exception& error) { result = {false, error.what()}; }
         task->result_ = std::move(result.output);
         task->state_ = result.success ? TaskState::Succeeded : TaskState::Failed;
+        if (result.success) for (auto* dependent : task->dependents_) refresh(*dependent);
+        else blockDependents(*task);
         return task->id_;
     }
     return std::nullopt;

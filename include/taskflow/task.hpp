@@ -8,7 +8,7 @@
 
 namespace taskflow {
 
-enum class TaskState { Waiting, Ready, Running, Succeeded, Failed, Cancelled };
+enum class TaskState { Waiting, Ready, Running, Succeeded, Failed, Cancelled, Blocked };
 
 inline const char* stateName(TaskState state) {
     switch (state) {
@@ -18,6 +18,7 @@ inline const char* stateName(TaskState state) {
         case TaskState::Succeeded: return "SUCCEEDED";
         case TaskState::Failed: return "FAILED";
         case TaskState::Cancelled: return "CANCELLED";
+        case TaskState::Blocked: return "BLOCKED";
     }
     return "UNKNOWN";
 }
@@ -33,6 +34,8 @@ class Task {
     std::string result_;
     std::uint64_t readySequence_ = 0;
     std::uint64_t readyVersion_ = 0;
+    std::vector<Task*> prerequisites_;
+    std::vector<Task*> dependents_;
 
 public:
     Task(std::string id, std::string title, int priority, std::unique_ptr<TaskAction> action)
@@ -44,6 +47,11 @@ public:
     TaskState state() const noexcept { return state_; }
     std::size_t attempts() const noexcept { return attempts_; }
     const std::string& result() const noexcept { return result_; }
+    std::vector<std::string> dependencies() const {
+        std::vector<std::string> result;
+        for (const auto* task : prerequisites_) result.push_back(task->id_);
+        return result;
+    }
 };
 
 }
