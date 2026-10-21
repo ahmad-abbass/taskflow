@@ -14,8 +14,13 @@ class Scheduler {
     TaskRegistry tasks_;
     std::unique_ptr<SchedulingPolicy> ready_ = makePolicy("fifo");
     std::uint64_t nextSequence_ = 0;
+    std::size_t edgeCount_ = 0;
     void enqueue(Task& task);
+    void refresh(Task& task);
+    void blockDependents(Task& task);
+    bool reaches(Task& from, Task& target) const;
 public:
+    void addDependency(const std::string& id, const std::string& prerequisite);
     void setPolicy(const std::string& name);
     std::string policyName() const { return ready_->name(); }
     const Task& add(std::string id, int priority, const std::string& kind,

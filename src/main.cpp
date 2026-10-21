@@ -38,7 +38,7 @@ int main() {
         try {
             if (command == "help") {
                 requireEnd(input);
-                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\npolicy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
+                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\ndepend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
             } else if (command == "add") {
                 const auto id = readToken(input);
                 const auto priority = taskflow::parseInteger(readToken(input));
@@ -50,6 +50,12 @@ int main() {
                 if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority out of range");
                 scheduler.add(id, static_cast<int>(priority), kind, payload, title);
                 std::cout << "OK added " << std::quoted(id) << '\n';
+            } else if (command == "depend") {
+                const auto id = readToken(input);
+                const auto prerequisite = readToken(input);
+                requireEnd(input);
+                scheduler.addDependency(id, prerequisite);
+                std::cout << "OK dependency\n";
             } else if (command == "policy") {
                 const auto name = readToken(input);
                 requireEnd(input);
@@ -75,6 +81,7 @@ int main() {
                 printTask(*task);
                 std::cout << "ACTION " << task->action().kind() << ' ' << std::quoted(task->action().payload())
                           << " TITLE " << std::quoted(task->title()) << '\n';
+                for (const auto& dependency : task->dependencies()) std::cout << "DEPENDS " << std::quoted(dependency) << '\n';
             } else if (command == "cancel") {
                 const auto id = readToken(input);
                 requireEnd(input);

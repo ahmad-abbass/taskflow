@@ -9,6 +9,42 @@
 
 int main() {
     Suite suite;
+    suite.add("diamond dependencies run only after every prerequisite succeeds", [] {
+        taskflow::Scheduler scheduler;
+        for (const auto* id : {"finish", "left", "right", "root"}) scheduler.add(id, 1, "sum", "1");
+        scheduler.addDependency("finish", "left");
+        scheduler.addDependency("finish", "right");
+        scheduler.addDependency("left", "root");
+        scheduler.addDependency("right", "root");
+        scheduler.setPolicy("priority");
+        require(scheduler.runNext() == "root", "waiting task was dispatched");
+        require(scheduler.runNext() == "left", "wrong released order");
+        require(scheduler.find("finish")->state() == taskflow::TaskState::Waiting, "join released too early");
+        require(scheduler.runNext() == "right" && scheduler.runNext() == "finish", "DAG did not drain");
+        require(!scheduler.runNext(), "stale ready entries executed twice");
+    });
+    suite.add("cycle rejection is atomic and duplicate edges are idempotent", [] {
+        taskflow::Scheduler scheduler;
+        for (const auto* id : {"a", "b", "c"}) scheduler.add(id, 1, "sum", "1");
+        scheduler.addDependency("b", "a"); scheduler.addDependency("c", "b");
+        scheduler.addDependency("b", "a");
+        throws<std::invalid_argument>([&] { scheduler.addDependency("a", "c"); });
+        throws<std::invalid_argument>([&] { scheduler.addDependency("a", "a"); });
+        require(scheduler.find("a")->dependencies().empty() && scheduler.find("b")->dependencies().size() == 1, "invalid edge changed graph");
+        require(scheduler.runUntilIdle() == 3, "graph remained cyclic");
+    });
+    suite.add("failure and cancellation block descendants without running them", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.add("root", 0, "sum", "9223372036854775807 1");
+        for (const auto* id : {"child", "leaf", "other"}) scheduler.add(id, 0, "sum", "1");
+        scheduler.addDependency("child", "root"); scheduler.addDependency("leaf", "child");
+        require(scheduler.runUntilIdle() == 2, "blocked task ran");
+        require(scheduler.find("leaf")->state() == taskflow::TaskState::Blocked && scheduler.find("leaf")->attempts() == 0, "failure did not propagate");
+        taskflow::Scheduler cancelled;
+        for (const auto* id : {"a", "b", "c"}) cancelled.add(id, 0, "sum", "1");
+        cancelled.addDependency("b", "a"); cancelled.cancel("a"); cancelled.addDependency("c", "a");
+        require(cancelled.runUntilIdle() == 0 && cancelled.find("c")->state() == taskflow::TaskState::Blocked, "cancelled prerequisite released work");
+    });
     suite.add("binary heap agrees with a reference under mixed operations", [] {
         taskflow::ds::BinaryHeap<int, std::less<int>> heap;
         std::priority_queue<int, std::vector<int>, std::greater<int>> reference;
