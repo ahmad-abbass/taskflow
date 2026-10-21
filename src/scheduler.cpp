@@ -6,6 +6,24 @@
 
 namespace taskflow {
 
+void Scheduler::enqueue(Task& task) {
+    task.readySequence_ = nextSequence_++;
+    ++task.readyVersion_;
+    ready_->push({&task, task.priority_, task.readySequence_, task.readyVersion_});
+    task.state_ = TaskState::Ready;
+}
+
+void Scheduler::setPolicy(const std::string& name) {
+    auto replacement = makePolicy(name);
+    ds::BinaryHeap<ReadyItem, OlderFirst> ordered;
+    for (const auto* task : tasks_.list()) {
+        if (task->state_ == TaskState::Ready)
+            ordered.push({tasks_.find(task->id_), task->priority_, task->readySequence_, task->readyVersion_});
+    }
+    while (!ordered.empty()) replacement->push(ordered.pop());
+    ready_ = std::move(replacement);
+}
+
 const Task& Scheduler::add(std::string id, int priority, const std::string& kind,
                            const std::string& payload, std::string title) {
     if (id.empty() || id.size() > 64) throw std::invalid_argument("ID must contain 1 to 64 characters");
@@ -19,8 +37,7 @@ const Task& Scheduler::add(std::string id, int priority, const std::string& kind
     auto action = makeAction(kind, payload);
     if (title.empty()) title = id;
     Task& task = tasks_.insert(std::make_unique<Task>(std::move(id), std::move(title), priority, std::move(action)));
-    ready_.push(&task);
-    task.state_ = TaskState::Ready;
+    enqueue(task);
     return task;
 }
 
@@ -33,9 +50,10 @@ void Scheduler::cancel(const std::string& id) {
 }
 
 std::optional<std::string> Scheduler::runNext() {
-    while (!ready_.empty()) {
-        Task* task = ready_.pop();
-        if (task->state_ != TaskState::Ready) continue;
+    while (!ready_->empty()) {
+        const auto item = ready_->pop();
+        Task* task = item.task;
+        if (task->state_ != TaskState::Ready || item.version != task->readyVersion_) continue;
         task->state_ = TaskState::Running;
         ++task->attempts_;
         TaskResult result;

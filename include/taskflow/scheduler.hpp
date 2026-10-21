@@ -2,6 +2,7 @@
 
 #include "taskflow/ds/linked_queue.hpp"
 #include "taskflow/registry.hpp"
+#include "taskflow/policy.hpp"
 
 #include <optional>
 #include <string>
@@ -11,8 +12,12 @@ namespace taskflow {
 
 class Scheduler {
     TaskRegistry tasks_;
-    ds::LinkedQueue<Task*> ready_;
+    std::unique_ptr<SchedulingPolicy> ready_ = makePolicy("fifo");
+    std::uint64_t nextSequence_ = 0;
+    void enqueue(Task& task);
 public:
+    void setPolicy(const std::string& name);
+    std::string policyName() const { return ready_->name(); }
     const Task& add(std::string id, int priority, const std::string& kind,
                     const std::string& payload, std::string title = "");
     void cancel(const std::string& id);

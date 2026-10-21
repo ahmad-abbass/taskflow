@@ -5,9 +5,41 @@
 #include <memory>
 #include <random>
 #include <unordered_map>
+#include <queue>
 
 int main() {
     Suite suite;
+    suite.add("binary heap agrees with a reference under mixed operations", [] {
+        taskflow::ds::BinaryHeap<int, std::less<int>> heap;
+        std::priority_queue<int, std::vector<int>, std::greater<int>> reference;
+        std::mt19937 random(42);
+        for (int i = 0; i < 30000; ++i) {
+            if (reference.empty() || random() % 3) {
+                const int value = static_cast<int>(random() % 1000);
+                heap.push(value); reference.push(value);
+            } else {
+                require(heap.top() == reference.top() && heap.pop() == reference.top(), "heap mismatch");
+                reference.pop();
+            }
+        }
+        while (!reference.empty()) { require(heap.pop() == reference.top(), "drain mismatch"); reference.pop(); }
+        throws<std::out_of_range>([&] { heap.pop(); });
+    });
+    suite.add("priority scheduling is stable and policies can change safely", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.add("low", -1, "sum", "1");
+        scheduler.add("high-first", 9, "sum", "2");
+        scheduler.add("high-second", 9, "sum", "3");
+        scheduler.add("cancelled", 100, "sum", "4");
+        scheduler.cancel("cancelled");
+        scheduler.setPolicy("priority");
+        require(scheduler.runNext() == "high-first", "wrong priority or tie break");
+        scheduler.setPolicy("fifo");
+        require(scheduler.runNext() == "low", "FIFO rebuild lost original ready order");
+        scheduler.setPolicy("priority");
+        throws<std::invalid_argument>([&] { scheduler.setPolicy("unknown"); });
+        require(scheduler.runNext() == "high-second" && !scheduler.runNext(), "switch lost a task");
+    });
     suite.add("hash table resolves collisions and retains references through growth", [] {
         struct Collision { std::size_t operator()(const std::string&) const { return 0; } };
         taskflow::ds::HashTable<std::unique_ptr<int>, Collision> table;

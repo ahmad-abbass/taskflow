@@ -31,6 +31,8 @@ class Task {
     TaskState state_ = TaskState::Waiting;
     std::size_t attempts_ = 0;
     std::string result_;
+    std::uint64_t readySequence_ = 0;
+    std::uint64_t readyVersion_ = 0;
 
 public:
     Task(std::string id, std::string title, int priority, std::unique_ptr<TaskAction> action)
