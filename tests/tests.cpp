@@ -9,6 +9,54 @@
 
 int main() {
     Suite suite;
+    suite.add("worker slots advance deterministically and respect dependency barriers", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.setWorkers(2);
+        scheduler.add("long", 0, "sum", "2"); scheduler.configure("long", 3, 0);
+        scheduler.add("short", 0, "sum", "1"); scheduler.add("child", 0, "sum", "4");
+        scheduler.addDependency("child", "long");
+        const auto first = scheduler.step();
+        require(first.tick == 1 && first.started.size() == 2 && first.completed == std::vector<std::string>{"short"}, "wrong first tick");
+        throws<std::logic_error>([&] { scheduler.setWorkers(3); });
+        require(scheduler.find("long")->state() == taskflow::TaskState::Running, "long task finished early");
+        scheduler.step();
+        require(scheduler.find("child")->state() == taskflow::TaskState::Waiting, "dependency barrier failed");
+        require(scheduler.step().completed == std::vector<std::string>{"long"}, "duration was not respected");
+        require(scheduler.step().completed == std::vector<std::string>{"child"}, "child did not start after completion");
+        require(!scheduler.step().progressed && scheduler.clock() == 4, "idle advanced the clock");
+    });
+    suite.add("retries use bounded exponential delay without releasing descendants early", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.add("unstable", 0, "flaky", "2 recovered"); scheduler.configure("unstable", 1, 2);
+        scheduler.add("child", 0, "sum", "1"); scheduler.addDependency("child", "unstable");
+        scheduler.step();
+        require(scheduler.find("unstable")->retryAt() == 2 && scheduler.find("child")->state() == taskflow::TaskState::Waiting, "retry released child");
+        require(scheduler.runUntilIdle() == 2 && scheduler.clock() == 7, "wrong backoff timeline");
+        const auto stats = scheduler.metrics();
+        require(stats.succeeded == 2 && stats.attempts == 4 && stats.failed == 0, "retry metrics wrong");
+        require(scheduler.find("unstable")->result() == "recovered", "retry did not recover");
+    });
+    suite.add("retry exhaustion blocks dependents and a delayed retry can be cancelled", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.add("exhaust", 0, "flaky", "3 nope"); scheduler.configure("exhaust", 1, 1);
+        scheduler.add("child", 0, "sum", "1"); scheduler.addDependency("child", "exhaust");
+        require(scheduler.runUntilIdle() == 1 && scheduler.find("exhaust")->attempts() == 2, "retry budget exceeded");
+        require(scheduler.find("child")->state() == taskflow::TaskState::Blocked, "failure did not propagate");
+        taskflow::Scheduler cancelled;
+        cancelled.add("retry", 0, "flaky", "2"); cancelled.configure("retry", 1, 2); cancelled.step();
+        cancelled.cancel("retry");
+        require(cancelled.runUntilIdle() == 0 && cancelled.clock() == 1, "cancelled timer kept work alive");
+    });
+    suite.add("run budgets leave a resumable simulation and completion batches lose no tasks", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.setWorkers(3);
+        for (const auto* id : {"a", "b", "c"}) { scheduler.add(id, 0, "sum", "1"); scheduler.configure(id, 3, 0); }
+        require(scheduler.runUntilIdle(100, 1) == 0 && scheduler.metrics().running == 3, "tick budget ignored");
+        require(scheduler.runNext() == "a" && scheduler.runNext() == "b" && scheduler.runNext() == "c", "batch completion lost an event");
+        require(!scheduler.runNext(), "finished simulation was not idle");
+        throws<std::invalid_argument>([&] { scheduler.setWorkers(0); });
+        throws<std::logic_error>([&] { scheduler.configure("a", 2, 1); });
+    });
     suite.add("diamond dependencies run only after every prerequisite succeeds", [] {
         taskflow::Scheduler scheduler;
         for (const auto* id : {"finish", "left", "right", "root"}) scheduler.add(id, 1, "sum", "1");
