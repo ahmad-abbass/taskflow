@@ -1,0 +1,18 @@
+workers 2
+policy priority
+add prepare 8 count "prepare questions and check the answer key" "Prepare exam"
+configure prepare 3 0
+add roster 4 sum "18 21 19" "Count student groups"
+configure roster 2 0
+add grade 10 flaky "2 grading finished" "Grade answers"
+configure grade 2 2
+depend grade prepare
+depend grade roster
+add publish 1 count "results are ready" "Publish results"
+depend publish grade
+step
+metrics
+run
+list
+metrics
+quit

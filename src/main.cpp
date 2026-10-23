@@ -19,6 +19,12 @@ void requireEnd(std::istringstream& input) {
     if (!input.eof()) throw std::invalid_argument("unexpected extra arguments");
 }
 
+std::size_t readBounded(std::istringstream& input, std::int64_t minimum, std::int64_t maximum) {
+    const auto value = taskflow::parseInteger(readToken(input));
+    if (value < minimum || value > maximum) throw std::invalid_argument("argument outside allowed range");
+    return static_cast<std::size_t>(value);
+}
+
 void printTask(const taskflow::Task& task) {
     std::cout << std::quoted(task.id()) << ' ' << taskflow::stateName(task.state()) << ' '
               << task.priority() << ' ' << task.attempts() << ' ' << std::quoted(task.result()) << '\n';
@@ -38,7 +44,7 @@ int main() {
         try {
             if (command == "help") {
                 requireEnd(input);
-                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\ndepend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
+                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nworkers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
             } else if (command == "add") {
                 const auto id = readToken(input);
                 const auto priority = taskflow::parseInteger(readToken(input));
@@ -50,6 +56,33 @@ int main() {
                 if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority out of range");
                 scheduler.add(id, static_cast<int>(priority), kind, payload, title);
                 std::cout << "OK added " << std::quoted(id) << '\n';
+            } else if (command == "workers") {
+                const auto count = readBounded(input, 1, 64);
+                requireEnd(input);
+                scheduler.setWorkers(count);
+                std::cout << "OK workers " << count << '\n';
+            } else if (command == "configure") {
+                const auto id = readToken(input);
+                const auto duration = readBounded(input, 1, 10000);
+                const auto retries = readBounded(input, 0, 10);
+                requireEnd(input);
+                scheduler.configure(id, duration, retries);
+                std::cout << "OK configured\n";
+            } else if (command == "step") {
+                requireEnd(input);
+                const auto report = scheduler.step();
+                std::cout << "TICK " << report.tick << '\n';
+                for (const auto& id : report.started) std::cout << "START " << std::quoted(id) << '\n';
+                for (const auto& id : report.completed) printTask(*scheduler.find(id));
+                if (!report.progressed) std::cout << "IDLE\n";
+            } else if (command == "metrics") {
+                requireEnd(input);
+                const auto metrics = scheduler.metrics();
+                std::cout << "METRICS submitted=" << metrics.submitted << " waiting=" << metrics.waiting
+                          << " ready=" << metrics.ready << " running=" << metrics.running << " retrying=" << metrics.retrying
+                          << " succeeded=" << metrics.succeeded << " failed=" << metrics.failed
+                          << " cancelled=" << metrics.cancelled << " blocked=" << metrics.blocked
+                          << " attempts=" << metrics.attempts << " ticks=" << metrics.ticks << '\n';
             } else if (command == "depend") {
                 const auto id = readToken(input);
                 const auto prerequisite = readToken(input);

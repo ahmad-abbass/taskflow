@@ -67,7 +67,7 @@ void Scheduler::addDependency(const std::string& id, const std::string& prerequi
     auto* task = tasks_.find(id);
     auto* prerequisite = tasks_.find(prerequisiteId);
     if (!task || !prerequisite) throw std::invalid_argument("dependency task not found");
-    if (!pending(task->state_)) throw std::logic_error("only pending tasks accept dependencies");
+    if (!pending(task->state_) || task->attempts_) throw std::logic_error("only unstarted tasks accept dependencies");
     for (const auto* existing : task->prerequisites_) if (existing == prerequisite) return;
     if (reaches(*task, *prerequisite)) throw std::invalid_argument("dependency would create a cycle");
     if (edgeCount_ >= 1000000) throw std::length_error("dependency limit reached");
@@ -82,6 +82,7 @@ void Scheduler::addDependency(const std::string& id, const std::string& prerequi
 }
 
 void Scheduler::enqueue(Task& task) {
+    task.retryAt_ = 0;
     task.readySequence_ = nextSequence_++;
     ++task.readyVersion_;
     ready_->push({&task, task.priority_, task.readySequence_, task.readyVersion_});
@@ -120,34 +121,131 @@ void Scheduler::cancel(const std::string& id) {
     Task* task = tasks_.find(id);
     if (!task) throw std::invalid_argument("task not found");
     if (task->state_ == TaskState::Cancelled) return;
-    if (!pending(task->state_)) throw std::logic_error("only pending tasks can be cancelled");
+    if (!pending(task->state_) && task->state_ != TaskState::RetryWait) throw std::logic_error("only pending tasks can be cancelled");
     task->state_ = TaskState::Cancelled;
     blockDependents(*task);
 }
 
-std::optional<std::string> Scheduler::runNext() {
+Task* Scheduler::takeReady() {
     while (!ready_->empty()) {
         const auto item = ready_->pop();
-        Task* task = item.task;
-        if (task->state_ != TaskState::Ready || item.version != task->readyVersion_) continue;
-        task->state_ = TaskState::Running;
-        ++task->attempts_;
-        TaskResult result;
-        try { result = task->action_->execute(task->attempts_); }
-        catch (const std::exception& error) { result = {false, error.what()}; }
-        task->result_ = std::move(result.output);
-        task->state_ = result.success ? TaskState::Succeeded : TaskState::Failed;
-        if (result.success) for (auto* dependent : task->dependents_) refresh(*dependent);
-        else blockDependents(*task);
-        return task->id_;
+        if (item.task->state_ == TaskState::Ready && item.version == item.task->readyVersion_) return item.task;
     }
-    return std::nullopt;
+    return nullptr;
 }
 
-std::size_t Scheduler::runUntilIdle(std::size_t limit) {
+void Scheduler::configure(const std::string& id, std::uint64_t duration, std::size_t retries) {
+    auto* task = tasks_.find(id);
+    if (!task) throw std::invalid_argument("task not found");
+    if (!pending(task->state_) || task->attempts_) throw std::logic_error("configure requires an unstarted task");
+    if (!duration || duration > 10000 || retries > 10) throw std::invalid_argument("duration must be 1..10000 and retries 0..10");
+    task->duration_ = duration;
+    task->maxRetries_ = retries;
+}
+
+void Scheduler::setWorkers(std::size_t count) {
+    if (!count || count > 64) throw std::invalid_argument("worker count must be 1..64");
+    for (const auto& slot : slots_) if (slot.task) throw std::logic_error("cannot resize running workers");
+    slots_.assign(count, Slot{});
+}
+
+void Scheduler::finish(Task& task) {
+    TaskResult result;
+    try { result = task.action_->execute(task.attempts_); }
+    catch (const std::exception& error) { result = {false, error.what()}; }
+    task.result_ = std::move(result.output);
+    if (!result.success && task.attempts_ <= task.maxRetries_) {
+        task.state_ = TaskState::RetryWait;
+        task.retryAt_ = clock_ + (std::uint64_t{1} << (task.attempts_ - 1));
+        ++task.readyVersion_;
+        delayed_.push({&task, task.retryAt_, nextSequence_++, task.readyVersion_});
+        return;
+    }
+    task.retryAt_ = 0;
+    task.state_ = result.success ? TaskState::Succeeded : TaskState::Failed;
+    completed_.push(task.id_);
+    if (result.success) for (auto* dependent : task.dependents_) refresh(*dependent);
+    else blockDependents(task);
+}
+
+TickReport Scheduler::advance() {
+    TickReport report{clock_, false, {}, {}};
+    while (!delayed_.empty() && delayed_.top().due <= clock_) {
+        const auto item = delayed_.pop();
+        if (item.task->state_ == TaskState::RetryWait && item.task->readyVersion_ == item.version) enqueue(*item.task);
+    }
+    bool active = false;
+    for (auto& slot : slots_) {
+        if (!slot.task) {
+            slot.task = takeReady();
+            if (slot.task) {
+                slot.task->state_ = TaskState::Running;
+                ++slot.task->attempts_;
+                slot.deadline = clock_ + slot.task->duration_;
+                report.started.push_back(slot.task->id_);
+            }
+        }
+        active = active || slot.task;
+    }
+    while (!delayed_.empty() && delayed_.top().task->state_ != TaskState::RetryWait) delayed_.pop();
+    if (!active && delayed_.empty()) return report;
+    if (clock_ >= 1000000000000ULL) throw std::length_error("simulation clock limit reached");
+    ++clock_;
+    report.tick = clock_;
+    report.progressed = true;
+    for (auto& slot : slots_) {
+        if (slot.task && slot.deadline <= clock_) {
+            auto* task = slot.task;
+            slot.task = nullptr;
+            finish(*task);
+        }
+    }
+    return report;
+}
+
+TickReport Scheduler::step() {
+    auto report = advance();
+    while (!completed_.empty()) report.completed.push_back(completed_.pop());
+    return report;
+}
+
+std::optional<std::string> Scheduler::runNext(std::size_t tickBudget) {
+    if (!completed_.empty()) return completed_.pop();
+    for (std::size_t tick = 0; tick < tickBudget; ++tick) {
+        if (!advance().progressed) return std::nullopt;
+        if (!completed_.empty()) return completed_.pop();
+    }
+    throw std::length_error("next exhausted its tick budget; use step or run to continue");
+}
+
+std::size_t Scheduler::runUntilIdle(std::size_t limit, std::size_t tickBudget) {
     std::size_t count = 0;
-    while (count < limit && runNext()) ++count;
+    std::size_t ticks = 0;
+    while (count < limit) {
+        if (!completed_.empty()) { completed_.pop(); ++count; continue; }
+        if (ticks == tickBudget || !advance().progressed) break;
+        ++ticks;
+    }
     return count;
+}
+
+Metrics Scheduler::metrics() const {
+    Metrics result;
+    result.submitted = size(); result.ticks = clock_;
+    for (const auto* task : list()) {
+        result.attempts += task->attempts_;
+        switch (task->state_) {
+            case TaskState::Waiting: ++result.waiting; break;
+            case TaskState::Ready: ++result.ready; break;
+            case TaskState::Running: ++result.running; break;
+            case TaskState::RetryWait: ++result.retrying; break;
+            case TaskState::Succeeded: ++result.succeeded; break;
+            case TaskState::Failed: ++result.failed; break;
+            case TaskState::Cancelled: ++result.cancelled; break;
+            case TaskState::Blocked: ++result.blocked; break;
+        }
+    }
+    return result;
 }
 
 }

@@ -8,7 +8,7 @@
 
 namespace taskflow {
 
-enum class TaskState { Waiting, Ready, Running, Succeeded, Failed, Cancelled, Blocked };
+enum class TaskState { Waiting, Ready, Running, Succeeded, Failed, Cancelled, Blocked, RetryWait };
 
 inline const char* stateName(TaskState state) {
     switch (state) {
@@ -19,6 +19,7 @@ inline const char* stateName(TaskState state) {
         case TaskState::Failed: return "FAILED";
         case TaskState::Cancelled: return "CANCELLED";
         case TaskState::Blocked: return "BLOCKED";
+        case TaskState::RetryWait: return "RETRY_WAIT";
     }
     return "UNKNOWN";
 }
@@ -36,6 +37,9 @@ class Task {
     std::uint64_t readyVersion_ = 0;
     std::vector<Task*> prerequisites_;
     std::vector<Task*> dependents_;
+    std::uint64_t duration_ = 1;
+    std::size_t maxRetries_ = 0;
+    std::uint64_t retryAt_ = 0;
 
 public:
     Task(std::string id, std::string title, int priority, std::unique_ptr<TaskAction> action)
@@ -47,6 +51,9 @@ public:
     TaskState state() const noexcept { return state_; }
     std::size_t attempts() const noexcept { return attempts_; }
     const std::string& result() const noexcept { return result_; }
+    std::uint64_t duration() const noexcept { return duration_; }
+    std::size_t maxRetries() const noexcept { return maxRetries_; }
+    std::uint64_t retryAt() const noexcept { return retryAt_; }
     std::vector<std::string> dependencies() const {
         std::vector<std::string> result;
         for (const auto* task : prerequisites_) result.push_back(task->id_);
