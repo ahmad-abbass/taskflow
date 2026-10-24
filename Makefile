@@ -1,7 +1,7 @@
 CXX ?= g++
 CPPFLAGS := -Iinclude
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
-SOURCES := src/actions.cpp src/scheduler.cpp
+SOURCES := src/actions.cpp src/scheduler.cpp src/snapshot.cpp
 
 .PHONY: all test sanitize clean demo
 all: build/taskflow

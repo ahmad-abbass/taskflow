@@ -1,3 +1,4 @@
 build/
 *.snapshot
 *.snapshot.tmp
+*.staging/

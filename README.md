@@ -1,6 +1,6 @@
 # TaskFlow
 
-A C++17 command line task scheduler for creating, running, and tracking tasks, built around object oriented design and custom data structures.
+A C++17 command-line task scheduler for creating, running, and tracking tasks, built around object-oriented design and custom data structures.
 
 ## Run
 
