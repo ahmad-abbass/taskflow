@@ -1,14 +1,78 @@
 #include "taskflow/scheduler.hpp"
 #include "test_support.hpp"
+#include "taskflow/history.hpp"
 
 #include <limits>
 #include <memory>
 #include <random>
 #include <unordered_map>
 #include <queue>
+#include <filesystem>
+#include <fstream>
+#include <chrono>
 
 int main() {
     Suite suite;
+    suite.add("snapshots preserve running slots, retry deadlines, graph, and deterministic continuation", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.setWorkers(2); scheduler.setPolicy("priority");
+        scheduler.add("long", 9, "sum", "3 4"); scheduler.configure("long", 4, 0);
+        scheduler.add("flaky", 8, "flaky", "2 recovered"); scheduler.configure("flaky", 1, 2);
+        scheduler.add("child", 0, "count", "two words"); scheduler.addDependency("child", "long");
+        scheduler.add("cancelled", 0, "sum", "1"); scheduler.cancel("cancelled");
+        scheduler.add("overflow", 0, "sum", "9223372036854775807 1");
+        scheduler.add("blocked", 0, "sum", "1"); scheduler.addDependency("blocked", "overflow");
+        scheduler.step();
+        require(scheduler.metrics().running == 1 && scheduler.metrics().retrying == 1, "fixture did not cover live state");
+        for (int i = 0; i < 15; ++i) {
+            const auto state = scheduler.snapshot();
+            taskflow::Scheduler restored; restored.restore(state);
+            require(restored.snapshot() == state, "round trip changed state");
+            const auto actual = scheduler.step(); const auto replay = restored.step();
+            require(actual.started == replay.started && actual.completed == replay.completed && scheduler.snapshot() == restored.snapshot(), "restored execution diverged");
+        }
+    });
+    suite.add("malformed snapshots are rejected without changing a live scheduler", [] {
+        taskflow::Scheduler scheduler; scheduler.add("one", 0, "sum", "1");
+        const auto original = scheduler.snapshot();
+        std::vector<std::string> invalid{original.substr(0, original.size() - 5), original + "extra", "TASKFLOW 99", "TASKFLOW 1 -1"};
+        auto slot = original; slot.replace(slot.find("SLOTS 0"), 7, "SLOTS 1\n0 \"one\" 1"); invalid.push_back(slot);
+        invalid.push_back("TASKFLOW 1\n0 1 \"fifo\" 2 2 2\nTASK \"a\" \"a\" 0 \"sum\" \"1\" 0 0 1 0 0 0 \"\" 1 \"b\"\nTASK \"b\" \"b\" 0 \"sum\" \"1\" 0 0 1 0 0 1 \"\" 1 \"a\"\nSLOTS 0\nEND\n");
+        for (const auto& bad : invalid) {
+            throws<std::invalid_argument>([&] { scheduler.restore(bad); });
+            require(scheduler.snapshot() == original, "failed restore changed state");
+        }
+        taskflow::Scheduler empty; empty.restore(taskflow::Scheduler{}.snapshot());
+        require(empty.size() == 0, "empty snapshot failed");
+    });
+    suite.add("snapshot replacement preserves existing files when staging is occupied", [] {
+        namespace fs = std::filesystem;
+        const auto root = fs::temp_directory_path() / ("taskflow-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        require(fs::create_directory(root), "could not create isolated fixture");
+        struct Cleanup { fs::path root; ~Cleanup() { std::error_code ignored; fs::remove_all(root, ignored); } } cleanup{root};
+        const auto path = (root / "state.snapshot").string();
+        taskflow::Scheduler scheduler; scheduler.add("one", 0, "sum", "1"); scheduler.save(path);
+        taskflow::Scheduler loaded; loaded.load(path);
+        require(loaded.snapshot() == scheduler.snapshot(), "file round trip failed");
+        scheduler.add("two", 0, "sum", "2");
+        fs::create_directory(path + ".staging");
+        std::ofstream(path + ".staging/keep") << "keep";
+        throws<std::runtime_error>([&] { scheduler.save(path); });
+        loaded.load(path);
+        require(loaded.size() == 1 && fs::exists(path + ".staging/keep"), "save damaged pre-existing files");
+        fs::remove_all(path + ".staging"); scheduler.save(path); loaded.load(path);
+        require(loaded.size() == 2, "replacement did not install new snapshot");
+    });
+    suite.add("linked undo history restores state and keeps only twenty entries", [] {
+        taskflow::Scheduler scheduler; taskflow::UndoHistory history;
+        throws<std::out_of_range>([&] { history.undo(scheduler); });
+        for (int i = 0; i < 25; ++i) { history.remember(scheduler.snapshot()); scheduler.add(std::to_string(i), 0, "sum", "1"); }
+        require(history.size() == 20, "history is not bounded");
+        for (int i = 24; i >= 5; --i) { history.undo(scheduler); require(scheduler.size() == static_cast<std::size_t>(i), "undo lost LIFO order"); }
+        taskflow::ds::LinkedStack<std::unique_ptr<int>> stack;
+        stack.push(std::make_unique<int>(1)); stack.push(std::make_unique<int>(2));
+        require(*stack.discardOldest() == 1 && *stack.pop() == 2, "stack mishandled move-only values");
+    });
     suite.add("worker slots advance deterministically and respect dependency barriers", [] {
         taskflow::Scheduler scheduler;
         scheduler.setWorkers(2);

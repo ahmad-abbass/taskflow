@@ -158,7 +158,8 @@ void Scheduler::finish(Task& task) {
         task.state_ = TaskState::RetryWait;
         task.retryAt_ = clock_ + (std::uint64_t{1} << (task.attempts_ - 1));
         ++task.readyVersion_;
-        delayed_.push({&task, task.retryAt_, nextSequence_++, task.readyVersion_});
+        task.readySequence_ = nextSequence_++;
+        delayed_.push({&task, task.retryAt_, task.readySequence_, task.readyVersion_});
         return;
     }
     task.retryAt_ = 0;

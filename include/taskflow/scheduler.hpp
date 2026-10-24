@@ -47,6 +47,10 @@ class Scheduler {
     TickReport advance();
     void finish(Task& task);
 public:
+    std::string snapshot() const;
+    void restore(const std::string& data);
+    void save(const std::string& path) const;
+    void load(const std::string& path);
     void configure(const std::string& id, std::uint64_t duration, std::size_t retries);
     void setWorkers(std::size_t count);
     std::size_t workerCount() const noexcept { return slots_.size(); }

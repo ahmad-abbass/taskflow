@@ -1,4 +1,5 @@
 #include "taskflow/scheduler.hpp"
+#include "taskflow/history.hpp"
 
 #include <iomanip>
 #include <iostream>
@@ -34,6 +35,7 @@ void printTask(const taskflow::Task& task) {
 
 int main() {
     taskflow::Scheduler scheduler;
+    taskflow::UndoHistory history;
     std::string line;
     bool failed = false;
     while (std::getline(std::cin, line)) {
@@ -42,9 +44,13 @@ int main() {
         std::string command;
         if (!(input >> command)) continue;
         try {
+            const bool mutates = command == "add" || command == "configure" || command == "workers" ||
+                command == "depend" || command == "policy" || command == "cancel" || command == "run" ||
+                command == "next" || command == "step" || command == "load";
+            const auto before = mutates ? scheduler.snapshot() : std::string{};
             if (command == "help") {
                 requireEnd(input);
-                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nworkers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
+                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nsave PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
             } else if (command == "add") {
                 const auto id = readToken(input);
                 const auto priority = taskflow::parseInteger(readToken(input));
@@ -56,6 +62,16 @@ int main() {
                 if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority out of range");
                 scheduler.add(id, static_cast<int>(priority), kind, payload, title);
                 std::cout << "OK added " << std::quoted(id) << '\n';
+            } else if (command == "save" || command == "load") {
+                const auto path = readToken(input);
+                requireEnd(input);
+                if (command == "save") scheduler.save(path);
+                else scheduler.load(path);
+                std::cout << "OK " << command << '\n';
+            } else if (command == "undo") {
+                requireEnd(input);
+                history.undo(scheduler);
+                std::cout << "OK undo " << history.size() << '\n';
             } else if (command == "workers") {
                 const auto count = readBounded(input, 1, 64);
                 requireEnd(input);
@@ -124,6 +140,7 @@ int main() {
                 requireEnd(input);
                 break;
             } else throw std::invalid_argument("unknown command; enter help");
+            if (mutates && scheduler.snapshot() != before) history.remember(before);
         } catch (const std::exception& error) {
             failed = true;
             std::cout << "ERROR " << error.what() << '\n';
