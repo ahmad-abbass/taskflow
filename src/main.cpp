@@ -50,7 +50,7 @@ int main() {
             const auto before = mutates ? scheduler.snapshot() : std::string{};
             if (command == "help") {
                 requireEnd(input);
-                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nsave PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
+                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nordered | range LOW HIGH | rank ID | select INDEX | save PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
             } else if (command == "add") {
                 const auto id = readToken(input);
                 const auto priority = taskflow::parseInteger(readToken(input));
@@ -62,6 +62,27 @@ int main() {
                 if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority out of range");
                 scheduler.add(id, static_cast<int>(priority), kind, payload, title);
                 std::cout << "OK added " << std::quoted(id) << '\n';
+            } else if (command == "ordered") {
+                requireEnd(input);
+                for (const auto* task : scheduler.ordered()) printTask(*task);
+                std::cout << "OK ordered " << scheduler.size() << '\n';
+            } else if (command == "range") {
+                const auto low = readToken(input);
+                const auto high = readToken(input);
+                requireEnd(input);
+                const auto tasks = scheduler.range(low, high);
+                for (const auto* task : tasks) printTask(*task);
+                std::cout << "OK range " << tasks.size() << '\n';
+            } else if (command == "rank") {
+                const auto id = readToken(input);
+                requireEnd(input);
+                std::cout << "RANK " << scheduler.rank(id) << '\n';
+            } else if (command == "select") {
+                const auto index = readBounded(input, 0, 100000);
+                requireEnd(input);
+                const auto* task = scheduler.select(index);
+                if (task) printTask(*task);
+                else std::cout << "EMPTY\n";
             } else if (command == "save" || command == "load") {
                 const auto path = readToken(input);
                 requireEnd(input);
@@ -112,7 +133,8 @@ int main() {
                 std::cout << "OK policy " << name << '\n';
             } else if (command == "run") {
                 requireEnd(input);
-                std::cout << "OK run " << scheduler.runUntilIdle() << '\n';
+                const auto count = scheduler.runUntilIdle();
+                std::cout << "OK run " << count << '\n';
             } else if (command == "next") {
                 requireEnd(input);
                 const auto id = scheduler.runNext();

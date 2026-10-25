@@ -3,7 +3,7 @@ CPPFLAGS := -Iinclude
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
 SOURCES := src/actions.cpp src/scheduler.cpp src/snapshot.cpp
 
-.PHONY: all test sanitize clean demo
+.PHONY: all test sanitize clean demo benchmark
 all: build/taskflow
 
 build:
@@ -25,6 +25,12 @@ sanitize: | build
 
 demo: build/taskflow
 	./build/taskflow < examples/first-session.txt
+
+build/benchmark: $(SOURCES) benchmarks/benchmark.cpp $(shell find include -name '*.hpp') | build
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) benchmarks/benchmark.cpp -o $@
+
+benchmark: build/benchmark
+	./build/benchmark
 
 clean:
 	rm -rf build

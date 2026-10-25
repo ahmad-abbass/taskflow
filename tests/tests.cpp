@@ -10,9 +10,88 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <map>
+#include <algorithm>
 
 int main() {
     Suite suite;
+    suite.add("AVL rotations preserve sorted order, balance, and subtree ranks", [] {
+        for (const std::vector<int>& order : {std::vector<int>{3, 2, 1}, {1, 2, 3}, {3, 1, 2}, {1, 3, 2}}) {
+            taskflow::ds::AvlTree<int> tree;
+            for (int value : order) tree.insert(std::to_string(value), value);
+            require(tree.valid() && tree.height() == 2 && tree.values() == std::vector<int>{1, 2, 3}, "AVL rotation failed");
+        }
+        taskflow::ds::AvlTree<int> tree;
+        std::map<std::string, int> reference;
+        std::vector<int> order(5000);
+        for (int i = 0; i < 5000; ++i) order[static_cast<std::size_t>(i)] = i;
+        std::mt19937 random(77); std::shuffle(order.begin(), order.end(), random);
+        for (int value : order) { tree.insert(std::to_string(value), value); reference.emplace(std::to_string(value), value); }
+        require(tree.valid() && tree.height() < 20 && tree.size() == 5000, "tree lost balance");
+        std::size_t index = 0;
+        for (const auto& entry : reference) {
+            require(tree.rank(entry.first) == index && *tree.select(index) == entry.second, "rank or select differs from reference"); ++index;
+        }
+        std::vector<int> expected;
+        for (auto it = reference.lower_bound("200"); it != reference.end() && it->first <= "350"; ++it) expected.push_back(it->second);
+        require(tree.range("200", "350") == expected && tree.range("z", "a").empty(), "range differs from reference");
+        throws<std::invalid_argument>([&] { tree.insert("1", 99); });
+        require(tree.valid() && !tree.select(5000), "duplicate damaged tree");
+    });
+    suite.add("ordered registry remains valid across rehashing and snapshot reload", [] {
+        taskflow::Scheduler scheduler;
+        for (const auto* id : {"zeta", "beta", "alpha"}) scheduler.add(id, 0, "sum", "1");
+        require(scheduler.select(0)->id() == "alpha" && scheduler.rank("beta") == 1, "ordered registry failed");
+        require(scheduler.list().front()->id() == "zeta" && scheduler.range("alpha", "beta").size() == 2, "insertion order or range failed");
+        const auto state = scheduler.snapshot(); scheduler.restore(state);
+        require(scheduler.select(2)->id() == "zeta" && !scheduler.select(3), "restored index failed");
+    });
+    suite.add("random DAG scheduling agrees with an independent topological outcome model", [] {
+        constexpr std::size_t count = 600;
+        taskflow::Scheduler scheduler; scheduler.setWorkers(7); scheduler.setPolicy("priority");
+        std::mt19937 random(2027);
+        std::vector<std::vector<std::size_t>> prerequisites(count);
+        std::vector<std::size_t> failures(count), retries(count);
+        std::vector<taskflow::TaskState> expected(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            failures[i] = random() % 3; retries[i] = random() % 3;
+            scheduler.add(std::to_string(i), static_cast<int>(random() % 20), "flaky", std::to_string(failures[i]) + " done");
+            scheduler.configure(std::to_string(i), 1 + random() % 4, retries[i]);
+            if (i > 0 && random() % 2) prerequisites[i].push_back(random() % i);
+            if (i > 1 && random() % 3 == 0) {
+                const auto prior = random() % i;
+                if (prerequisites[i].empty() || prerequisites[i][0] != prior) prerequisites[i].push_back(prior);
+            }
+        }
+        for (std::size_t i = 0; i < count; ++i)
+            for (auto prerequisite : prerequisites[i]) scheduler.addDependency(std::to_string(i), std::to_string(prerequisite));
+        for (std::size_t i = 0; i < count; ++i) {
+            bool blocked = false;
+            for (auto prerequisite : prerequisites[i]) blocked = blocked || expected[prerequisite] != taskflow::TaskState::Succeeded;
+            if (prerequisites[i].empty() && i % 29 == 0) { scheduler.cancel(std::to_string(i)); expected[i] = taskflow::TaskState::Cancelled; }
+            else expected[i] = blocked ? taskflow::TaskState::Blocked : failures[i] <= retries[i] ? taskflow::TaskState::Succeeded : taskflow::TaskState::Failed;
+        }
+        scheduler.runUntilIdle();
+        std::size_t totalAttempts = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto* task = scheduler.find(std::to_string(i));
+            require(task->state() == expected[i], "random DAG outcome mismatch at " + std::to_string(i));
+            const auto attempts = expected[i] == taskflow::TaskState::Blocked || expected[i] == taskflow::TaskState::Cancelled ? 0 : std::min(failures[i] + 1, retries[i] + 1);
+            require(task->attempts() == attempts, "random DAG attempts mismatch"); totalAttempts += attempts;
+        }
+        require(scheduler.metrics().attempts == totalAttempts && !scheduler.step().progressed, "random simulation did not settle");
+        const auto state = scheduler.snapshot(); scheduler.restore(state);
+        require(scheduler.snapshot() == state, "settled random DAG did not round trip");
+    });
+    suite.add("every truncated prefix of a snapshot is rejected transactionally", [] {
+        taskflow::Scheduler scheduler; scheduler.add("one", 1, "count", "quoted \\\"text\\\" and words");
+        const auto state = scheduler.snapshot();
+        const auto end = state.find("END");
+        for (std::size_t i = 0; i < end + 3; ++i) {
+            throws<std::invalid_argument>([&] { scheduler.restore(state.substr(0, i)); });
+            require(scheduler.snapshot() == state, "truncated load mutated state");
+        }
+    });
     suite.add("snapshots preserve running slots, retry deadlines, graph, and deterministic continuation", [] {
         taskflow::Scheduler scheduler;
         scheduler.setWorkers(2); scheduler.setPolicy("priority");

@@ -67,6 +67,10 @@ public:
     std::size_t runUntilIdle(std::size_t limit = 100000, std::size_t tickBudget = 1000000);
     const Task* find(const std::string& id) const { return tasks_.find(id); }
     std::vector<const Task*> list() const { return tasks_.list(); }
+    std::vector<const Task*> ordered() const { return tasks_.ordered(); }
+    std::vector<const Task*> range(const std::string& low, const std::string& high) const { return tasks_.range(low, high); }
+    std::size_t rank(const std::string& id) const { return tasks_.rank(id); }
+    const Task* select(std::size_t index) const { return tasks_.select(index); }
     std::size_t size() const noexcept { return tasks_.size(); }
 };
 

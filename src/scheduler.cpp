@@ -1,6 +1,5 @@
 #include "taskflow/scheduler.hpp"
 
-#include <cctype>
 #include <stdexcept>
 #include <utility>
 
@@ -104,7 +103,7 @@ const Task& Scheduler::add(std::string id, int priority, const std::string& kind
                            const std::string& payload, std::string title) {
     if (id.empty() || id.size() > 64) throw std::invalid_argument("ID must contain 1 to 64 characters");
     for (const unsigned char ch : id)
-        if (!std::isalnum(ch) && ch != '-' && ch != '_')
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_'))
             throw std::invalid_argument("ID accepts letters, digits, dash and underscore");
     if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority must be between -1000 and 1000");
     if (title.size() > 160) throw std::invalid_argument("title exceeds 160 bytes");
