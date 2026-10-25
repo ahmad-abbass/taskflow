@@ -50,7 +50,7 @@ std::unique_ptr<TaskAction> makeAction(const std::string& kind, const std::strin
     if (kind == "sum") return std::make_unique<SumAction>(payload);
     if (kind == "count") return std::make_unique<WordCountAction>(payload);
     if (kind == "flaky") return std::make_unique<FlakyAction>(payload);
-    throw std::invalid_argument("unknown action; choose sum or count");
+    throw std::invalid_argument("unknown action; choose sum, count or flaky");
 }
 
 FlakyAction::FlakyAction(std::string payload) : payload_(std::move(payload)) {
