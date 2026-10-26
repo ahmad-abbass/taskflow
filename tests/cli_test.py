@@ -26,3 +26,48 @@ with tempfile.TemporaryDirectory(prefix="taskflow-cli-") as directory:
     invalid = subprocess.run([binary], input='workers -1\nconfigure alpha 1x 2\nselect -1\nundo\nquit\n', text=True, capture_output=True)
     assert invalid.returncode == 1 and invalid.stdout.count("ERROR") == 4
 print("PASS CLI snapshots, undo, ordered queries, metrics, and bounded inputs")
+
+
+def listing_groups(output):
+    groups, rows = [], []
+    for line in output.splitlines():
+        if line.startswith("OK listed "):
+            assert int(line.rsplit(" ", 1)[1]) == len(rows), output
+            groups.append(rows)
+            rows = []
+        elif line.startswith('"'):
+            rows.append(line)
+    return groups
+
+
+states = ("waiting", "ready", "running", "succeeded", "failed", "cancelled", "blocked", "retry_wait")
+empty = subprocess.run([binary], input="".join(f"list {state}\n" for state in states) + "list\nquit\n",
+                       text=True, capture_output=True, check=True)
+assert listing_groups(empty.stdout) == [[]] * 9
+
+commands = (
+    'add ready-z -1 sum "4"\nadd ready-a 9 sum "5"\n'
+    'add waiting 0 sum "1"\ndepend waiting ready-z\n'
+    'add cancelled 0 sum "1"\ncancel cancelled\n'
+    'list ready\nlist ReAdY\nlist failed\nlist waiting\nlist cancelled\nlist\nquit\n'
+)
+filtered = subprocess.run([binary], input=commands, text=True, capture_output=True, check=True)
+groups = listing_groups(filtered.stdout)
+ready = ['"ready-z" READY -1 0 ""', '"ready-a" READY 9 0 ""']
+waiting = ['"waiting" WAITING 0 0 ""']
+cancelled = ['"cancelled" CANCELLED 0 0 ""']
+assert groups == [ready, ready, [], waiting, cancelled, ready + waiting + cancelled], filtered.stdout
+
+invalid = subprocess.run(
+    [binary],
+    input='add keep 0 sum "1"\ncancel keep\nlist missing\nlist ready extra\nlist ""\nlist "unterminated\n'
+          'list cancelled\nundo\nlist ready\nquit\n',
+    text=True, capture_output=True,
+)
+assert invalid.returncode == 1 and invalid.stdout.count("ERROR ") == 4, invalid.stdout
+assert "unknown task state; choose waiting, ready, running, succeeded, failed, cancelled, blocked or retry_wait" in invalid.stdout
+assert listing_groups(invalid.stdout) == [['"keep" CANCELLED 0 0 ""'], ['"keep" READY 0 0 ""']], invalid.stdout
+
+help_output = subprocess.run([binary], input="help\nquit\n", text=True, capture_output=True, check=True).stdout
+assert "list [STATE]" in help_output and "retry_wait" in help_output
+print("PASS CLI state filters, matching counts, input validation, and read-only undo behavior")
