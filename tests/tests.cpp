@@ -15,6 +15,45 @@
 
 int main() {
     Suite suite;
+    suite.add("state filters preserve insertion order and leave live scheduling unchanged", [] {
+        using taskflow::TaskState;
+        taskflow::Scheduler scheduler;
+        require(scheduler.list(TaskState::Ready).empty(), "empty registry matched a state");
+        scheduler.add("done", 0, "sum", "1"); scheduler.runNext();
+        scheduler.add("failed", 0, "flaky", "1");
+        scheduler.add("blocked", 0, "sum", "1"); scheduler.addDependency("blocked", "failed");
+        scheduler.runNext();
+        scheduler.add("cancelled", 0, "sum", "1"); scheduler.cancel("cancelled");
+        scheduler.setWorkers(2);
+        scheduler.add("retry", 0, "flaky", "2 recovered"); scheduler.configure("retry", 1, 2);
+        scheduler.add("running", 0, "sum", "2"); scheduler.configure("running", 5, 0);
+        scheduler.step();
+        scheduler.add("waiting", 0, "sum", "3"); scheduler.addDependency("waiting", "running");
+        scheduler.add("ready-z", -1, "sum", "4");
+        scheduler.add("ready-a", 9, "sum", "5");
+        const std::vector<std::pair<TaskState, std::vector<std::string>>> expected{
+            {TaskState::Waiting, {"waiting"}}, {TaskState::Ready, {"ready-z", "ready-a"}},
+            {TaskState::Running, {"running"}}, {TaskState::Succeeded, {"done"}},
+            {TaskState::Failed, {"failed"}}, {TaskState::Cancelled, {"cancelled"}},
+            {TaskState::Blocked, {"blocked"}}, {TaskState::RetryWait, {"retry"}}
+        };
+        const auto before = scheduler.snapshot();
+        const auto all = scheduler.list();
+        const auto& view = scheduler;
+        for (const auto& entry : expected) {
+            const auto tasks = view.list(entry.first);
+            require(tasks.size() == entry.second.size(), "state filter returned the wrong count");
+            for (std::size_t i = 0; i < tasks.size(); ++i)
+                require(tasks[i] == view.find(entry.second[i]), "filter changed task order or identity");
+        }
+        require(scheduler.list() == all && scheduler.snapshot() == before, "listing changed live state");
+        taskflow::Scheduler replay; replay.restore(before);
+        require(replay.list(TaskState::Ready).size() == 2, "restored tasks could not be filtered");
+        scheduler.runUntilIdle(); replay.runUntilIdle();
+        require(scheduler.snapshot() == replay.snapshot(), "filtering changed execution");
+        require(scheduler.list(TaskState::Running).empty() && scheduler.list(TaskState::RetryWait).empty(),
+                "state filters retained tasks after their state changed");
+    });
     suite.add("AVL rotations preserve sorted order, balance, and subtree ranks", [] {
         for (const std::vector<int>& order : {std::vector<int>{3, 2, 1}, {1, 2, 3}, {3, 1, 2}, {1, 3, 2}}) {
             taskflow::ds::AvlTree<int> tree;

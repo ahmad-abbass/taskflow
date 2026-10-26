@@ -1,7 +1,9 @@
 #include "taskflow/scheduler.hpp"
 #include "taskflow/history.hpp"
 
+#include <cctype>
 #include <iomanip>
+#include <optional>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -18,6 +20,22 @@ std::string readToken(std::istringstream& input) {
 void requireEnd(std::istringstream& input) {
     input >> std::ws;
     if (!input.eof()) throw std::invalid_argument("unexpected extra arguments");
+}
+
+std::optional<taskflow::TaskState> readStateFilter(std::istringstream& input) {
+    input >> std::ws;
+    if (input.eof()) return std::nullopt;
+    auto name = readToken(input);
+    for (auto& ch : name)
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    using taskflow::TaskState;
+    const TaskState states[] = {
+        TaskState::Waiting, TaskState::Ready, TaskState::Running, TaskState::Succeeded,
+        TaskState::Failed, TaskState::Cancelled, TaskState::Blocked, TaskState::RetryWait
+    };
+    for (const auto state : states)
+        if (name == taskflow::stateName(state)) return state;
+    throw std::invalid_argument("unknown task state; choose waiting, ready, running, succeeded, failed, cancelled, blocked or retry_wait");
 }
 
 std::size_t readBounded(std::istringstream& input, std::int64_t minimum, std::int64_t maximum) {
@@ -50,7 +68,11 @@ int main() {
             const auto before = mutates ? scheduler.snapshot() : std::string{};
             if (command == "help") {
                 requireEnd(input);
-                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\nKIND: sum | count | flaky\nordered | range LOW HIGH | rank ID | select INDEX | save PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | list | show ID | cancel ID | quit\n";
+                std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\n"
+                             "KIND: sum | count | flaky\n"
+                             "list [STATE]\n"
+                             "STATE: waiting | ready | running | succeeded | failed | cancelled | blocked | retry_wait\n"
+                             "ordered | range LOW HIGH | rank ID | select INDEX | save PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | show ID | cancel ID | quit\n";
             } else if (command == "add") {
                 const auto id = readToken(input);
                 const auto priority = taskflow::parseInteger(readToken(input));
@@ -141,9 +163,11 @@ int main() {
                 if (id) printTask(*scheduler.find(*id));
                 else std::cout << "EMPTY\n";
             } else if (command == "list") {
+                const auto state = readStateFilter(input);
                 requireEnd(input);
-                for (const auto* task : scheduler.list()) printTask(*task);
-                std::cout << "OK listed " << scheduler.size() << '\n';
+                const auto tasks = scheduler.list(state);
+                for (const auto* task : tasks) printTask(*task);
+                std::cout << "OK listed " << tasks.size() << '\n';
             } else if (command == "show") {
                 const auto id = readToken(input);
                 requireEnd(input);

@@ -5,6 +5,7 @@
 #include "taskflow/ds/avl_tree.hpp"
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -32,10 +33,11 @@ public:
         order_.push_back(stored.get());
         return *stored;
     }
-    std::vector<const Task*> list() const {
+    std::vector<const Task*> list(std::optional<TaskState> state = std::nullopt) const {
         std::vector<const Task*> result;
         result.reserve(tasks_.size());
-        for (const auto* task : order_) result.push_back(task);
+        for (const auto* task : order_)
+            if (!state || task->state() == *state) result.push_back(task);
         return result;
     }
     std::size_t size() const noexcept { return tasks_.size(); }

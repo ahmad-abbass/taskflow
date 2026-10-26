@@ -11,6 +11,15 @@ Start with the FIFO milestone if time is limited. Learn one structure and one sc
 7. Read `snapshot.cpp`. Parse into a temporary scheduler, connect edges, validate with Kahn's algorithm, validate states, then move the candidate into place. Discuss why saving completion-report messages is a separate concern from saving task state.
 8. Read `avl_tree.hpp`. Work through LL, RR, LR, and RL insertions. Each rotation must refresh both height and subtree count. Rank adds the left subtree size when descending right; select uses the same count in reverse.
 
+## Inspect task states
+
+Use `list ready`, `list failed`, or `list running` to inspect one state. Other filters are
+`waiting`, `succeeded`, `cancelled`, `blocked`, and `retry_wait`. State names are
+case-insensitive; plain `list` shows every task. The reported count is the number of matches.
+
+Filtering scans the registry in insertion order in O(n) time. It returns pointers to the
+existing tasks without advancing virtual time, changing scheduling order, or adding undo history.
+
 ## Questions worth practicing
 
 - Why are both a hash table and an AVL index useful? What would become slower if only one remained?
