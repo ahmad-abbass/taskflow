@@ -44,6 +44,8 @@ class Scheduler {
     void blockDependents(Task& task);
     bool reaches(Task& from, Task& target) const;
     Task* takeReady();
+    std::unique_ptr<SchedulingPolicy> buildReadyPolicy(const std::string& name,
+                                                      const Task* changed = nullptr, int priority = 0);
     TickReport advance();
     void finish(Task& task);
 public:
@@ -59,6 +61,7 @@ public:
     Metrics metrics() const;
     void addDependency(const std::string& id, const std::string& prerequisite);
     void setPolicy(const std::string& name);
+    void setPriority(const std::string& id, int priority);
     std::string policyName() const { return ready_->name(); }
     const Task& add(std::string id, int priority, const std::string& kind,
                     const std::string& payload, std::string title = "");

@@ -71,3 +71,27 @@ assert listing_groups(invalid.stdout) == [['"keep" CANCELLED 0 0 ""'], ['"keep" 
 help_output = subprocess.run([binary], input="help\nquit\n", text=True, capture_output=True, check=True).stdout
 assert "list [STATE]" in help_output and "retry_wait" in help_output
 print("PASS CLI state filters, matching counts, input validation, and read-only undo behavior")
+
+with tempfile.TemporaryDirectory(prefix="taskflow-priority-") as directory:
+    snapshot = str(pathlib.Path(directory) / "priority.snapshot")
+    commands = (
+        'add first 0 sum "1"\nadd second 9 sum "2"\npolicy priority\npriority first 10\n'
+        f'save "{snapshot}"\nundo\nshow first\nload "{snapshot}"\nnext\n'
+        'priority second -1000\nnext\nquit\n'
+    )
+    updated = subprocess.run([binary], input=commands, text=True, capture_output=True, check=True)
+    assert '"first" READY 0 0 ""' in updated.stdout, updated.stdout
+    assert '"first" SUCCEEDED 10 1 "1"' in updated.stdout, updated.stdout
+    assert '"second" SUCCEEDED -1000 1 "2"' in updated.stdout, updated.stdout
+
+invalid = subprocess.run(
+    [binary],
+    input='add keep 0 sum "1"\npriority keep 6\npriority keep 6\npriority missing 3\n'
+          'priority keep 1001\npriority keep -1001\npriority keep 1x\npriority keep 4 extra\n'
+          'priority keep\nundo\nshow keep\nquit\n',
+    text=True, capture_output=True,
+)
+assert invalid.returncode == 1 and invalid.stdout.count("ERROR ") == 6, invalid.stdout
+assert '"keep" READY 0 0 ""' in invalid.stdout, invalid.stdout
+assert "priority ID VALUE" in help_output
+print("PASS CLI priority updates, snapshot persistence, undo, no-op history, and rejected inputs")

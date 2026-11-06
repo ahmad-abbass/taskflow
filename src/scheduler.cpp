@@ -88,15 +88,33 @@ void Scheduler::enqueue(Task& task) {
     task.state_ = TaskState::Ready;
 }
 
-void Scheduler::setPolicy(const std::string& name) {
+std::unique_ptr<SchedulingPolicy> Scheduler::buildReadyPolicy(const std::string& name,
+                                                             const Task* changed, int priority) {
     auto replacement = makePolicy(name);
     ds::BinaryHeap<ReadyItem, OlderFirst> ordered;
     for (const auto* task : tasks_.list()) {
         if (task->state_ == TaskState::Ready)
-            ordered.push({tasks_.find(task->id_), task->priority_, task->readySequence_, task->readyVersion_});
+            ordered.push({tasks_.find(task->id_), task == changed ? priority : task->priority_,
+                          task->readySequence_, task->readyVersion_});
     }
     while (!ordered.empty()) replacement->push(ordered.pop());
-    ready_ = std::move(replacement);
+    return replacement;
+}
+
+void Scheduler::setPolicy(const std::string& name) {
+    ready_ = buildReadyPolicy(name);
+}
+
+void Scheduler::setPriority(const std::string& id, int priority) {
+    auto* task = tasks_.find(id);
+    if (!task) throw std::invalid_argument("task not found");
+    if (priority < -1000 || priority > 1000) throw std::invalid_argument("priority must be between -1000 and 1000");
+    if (!pending(task->state_) || task->attempts_) throw std::logic_error("priority requires an unstarted task");
+    if (task->priority_ == priority) return;
+    std::unique_ptr<SchedulingPolicy> replacement;
+    if (task->state_ == TaskState::Ready) replacement = buildReadyPolicy(policyName(), task, priority);
+    task->priority_ = priority;
+    if (replacement) ready_ = std::move(replacement);
 }
 
 const Task& Scheduler::add(std::string id, int priority, const std::string& kind,
