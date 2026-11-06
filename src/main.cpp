@@ -64,12 +64,13 @@ int main() {
         try {
             const bool mutates = command == "add" || command == "configure" || command == "workers" ||
                 command == "depend" || command == "policy" || command == "cancel" || command == "run" ||
-                command == "next" || command == "step" || command == "load";
+                command == "next" || command == "step" || command == "load" || command == "priority";
             const auto before = mutates ? scheduler.snapshot() : std::string{};
             if (command == "help") {
                 requireEnd(input);
                 std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\n"
                              "KIND: sum | count | flaky\n"
+                             "priority ID VALUE (unstarted tasks; -1000..1000)\n"
                              "list [STATE]\n"
                              "STATE: waiting | ready | running | succeeded | failed | cancelled | blocked | retry_wait\n"
                              "ordered | range LOW HIGH | rank ID | select INDEX | save PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | show ID | cancel ID | quit\n";
@@ -153,6 +154,13 @@ int main() {
                 requireEnd(input);
                 scheduler.setPolicy(name);
                 std::cout << "OK policy " << name << '\n';
+            } else if (command == "priority") {
+                const auto id = readToken(input);
+                const auto value = taskflow::parseInteger(readToken(input));
+                requireEnd(input);
+                if (value < -1000 || value > 1000) throw std::invalid_argument("priority must be between -1000 and 1000");
+                scheduler.setPriority(id, static_cast<int>(value));
+                std::cout << "OK priority " << std::quoted(id) << ' ' << value << '\n';
             } else if (command == "run") {
                 requireEnd(input);
                 const auto count = scheduler.runUntilIdle();

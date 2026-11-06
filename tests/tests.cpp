@@ -15,6 +15,90 @@
 
 int main() {
     Suite suite;
+    suite.add("priority changes preserve FIFO order, stable ties, and task indexes", [] {
+        taskflow::Scheduler scheduler;
+        const auto* first = &scheduler.add("first", 0, "sum", "1");
+        scheduler.add("second", 9, "sum", "2");
+        scheduler.add("third", 4, "sum", "3");
+        scheduler.setPriority("first", -10);
+        scheduler.setPriority("second", 1000);
+        require(scheduler.find("first") == first && scheduler.select(0) == first,
+                "priority update replaced a task or damaged its ID index");
+        require(scheduler.clock() == 0 && first->attempts() == 0, "priority update executed work");
+        require(scheduler.runNext() == "first", "priority update reordered FIFO");
+        scheduler.setPolicy("priority");
+        scheduler.setPriority("second", 4);
+        require(scheduler.runNext() == "second" && scheduler.runNext() == "third",
+                "equal priorities lost their original readiness order");
+        require(!scheduler.runNext(), "rebuilding a queue duplicated a task");
+    });
+    suite.add("updated priority respects prerequisites and survives snapshots", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.setPolicy("priority");
+        scheduler.add("root", -1000, "sum", "1");
+        scheduler.add("child", 0, "sum", "2");
+        scheduler.addDependency("child", "root");
+        scheduler.setPriority("child", 1000);
+        require(scheduler.find("child")->state() == taskflow::TaskState::Waiting,
+                "priority update bypassed a prerequisite");
+        const auto state = scheduler.snapshot();
+        scheduler.setPriority("child", 1000);
+        require(scheduler.snapshot() == state, "unchanged priority was not a no-op");
+        taskflow::Scheduler restored;
+        restored.restore(state);
+        for (auto* instance : {&scheduler, &restored}) {
+            require(instance->find("child")->priority() == 1000, "snapshot lost the priority change");
+            require(instance->runNext() == "root" && instance->runNext() == "child",
+                    "restored priorities changed dependency order");
+        }
+        require(scheduler.snapshot() == restored.snapshot(), "restored execution diverged");
+    });
+    suite.add("invalid priority updates leave running, retrying, and terminal tasks unchanged", [] {
+        taskflow::Scheduler scheduler;
+        scheduler.add("done", 0, "sum", "1"); scheduler.runNext();
+        scheduler.add("failed", 0, "flaky", "1");
+        scheduler.add("blocked", 0, "sum", "1"); scheduler.addDependency("blocked", "failed");
+        scheduler.runNext();
+        scheduler.add("cancelled", 0, "sum", "1"); scheduler.cancel("cancelled");
+        scheduler.setWorkers(2);
+        scheduler.add("retry", 0, "flaky", "2 recovered"); scheduler.configure("retry", 1, 2);
+        scheduler.add("running", 0, "sum", "1"); scheduler.configure("running", 5, 0);
+        scheduler.step();
+        scheduler.add("ready", 0, "sum", "1");
+        const auto before = scheduler.snapshot();
+        for (const auto* id : {"done", "failed", "blocked", "cancelled", "retry", "running"}) {
+            throws<std::logic_error>([&] { scheduler.setPriority(id, 3); });
+            require(scheduler.snapshot() == before, "rejected priority changed live state");
+        }
+        throws<std::invalid_argument>([&] { scheduler.setPriority("missing", 1); });
+        throws<std::invalid_argument>([&] { scheduler.setPriority("ready", -1001); });
+        throws<std::invalid_argument>([&] { scheduler.setPriority("ready", 1001); });
+        require(scheduler.snapshot() == before, "invalid priority damaged the queue");
+    });
+    suite.add("repeated priority updates agree with an independent stable ordering model", [] {
+        constexpr std::size_t count = 80;
+        taskflow::Scheduler scheduler;
+        scheduler.setPolicy("priority");
+        std::vector<int> priorities(count, 0);
+        std::vector<std::size_t> expected;
+        for (std::size_t i = 0; i < count; ++i) {
+            scheduler.add(std::to_string(i), 0, "sum", "1");
+            expected.push_back(i);
+        }
+        std::mt19937 random(113);
+        for (int change = 0; change < 250; ++change) {
+            const auto i = random() % count;
+            priorities[i] = static_cast<int>(random() % 2001) - 1000;
+            scheduler.setPriority(std::to_string(i), priorities[i]);
+        }
+        std::stable_sort(expected.begin(), expected.end(), [&](auto a, auto b) {
+            return priorities[a] > priorities[b];
+        });
+        for (const auto i : expected)
+            require(scheduler.runNext() == std::to_string(i), "priority queue differs from the reference");
+        require(!scheduler.runNext() && scheduler.metrics().attempts == count,
+                "repeated updates caused missing or duplicate executions");
+    });
     suite.add("state filters preserve insertion order and leave live scheduling unchanged", [] {
         using taskflow::TaskState;
         taskflow::Scheduler scheduler;

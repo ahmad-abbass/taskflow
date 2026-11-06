@@ -20,6 +20,19 @@ case-insensitive; plain `list` shows every task. The reported count is the numbe
 Filtering scans the registry in insertion order in O(n) time. It returns pointers to the
 existing tasks without advancing virtual time, changing scheduling order, or adding undo history.
 
+## Change an unstarted task's priority
+
+Use `priority report 8` to change a task before its first execution. Values range from
+`-1000` to `1000`. Ready and waiting tasks can change; running, retrying, and terminal
+tasks cannot. Higher values run first under the priority policy. Dependencies still have
+to succeed, and FIFO keeps the task's original readiness order.
+
+A ready-task update builds a replacement queue before changing live state. With `n`
+tasks, `r` ready tasks, and average O(1) hash lookups, this takes O(n + r log r)
+time and O(n + r) extra space.
+Waiting tasks need no queue rebuild. The hash lookup and AVL index still reference the
+same task. The new value is included in snapshots, and the command supports `undo`.
+
 ## Questions worth practicing
 
 - Why are both a hash table and an AVL index useful? What would become slower if only one remained?
