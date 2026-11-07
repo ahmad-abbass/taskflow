@@ -10,6 +10,7 @@ Start with the FIFO milestone if time is limited. Learn one structure and one sc
 6. Trace `advance` and `finish` using `examples/exam-pipeline.txt`. A duration is virtual time, not sleeping or background execution. Explain how an attempt can fail while its task still has retries remaining.
 7. Read `snapshot.cpp`. Parse into a temporary scheduler, connect edges, validate with Kahn's algorithm, validate states, then move the candidate into place. Discuss why saving completion-report messages is a separate concern from saving task state.
 8. Read `avl_tree.hpp`. Work through LL, RR, LR, and RL insertions. Each rotation must refresh both height and subtree count. Rank adds the left subtree size when descending right; select uses the same count in reverse.
+9. Read `analysis.cpp`. Follow Kahn's topological traversal and the longest-path calculation. Each task starts after its latest-finishing prerequisite; following those predecessors reconstructs one critical path.
 
 ## Inspect task states
 
@@ -32,6 +33,25 @@ tasks, `r` ready tasks, and average O(1) hash lookups, this takes O(n + r log r)
 time and O(n + r) extra space.
 Waiting tasks need no queue rebuild. The hash lookup and AVL index still reference the
 same task. The new value is included in snapshots, and the command supports `undo`.
+
+## Analyze dependencies
+
+Run `analyze` to inspect the whole configured plan from tick zero. It reports each
+task's earliest start/finish, one critical path, and the current states of its direct
+unfinished prerequisites. Rows retain task insertion order. Ties between equally long
+paths also use insertion order, independently of scheduling policy and priority.
+
+`dependency_min_ticks` is an ideal lower bound using nominal configured durations,
+unlimited workers, and successful execution without retries. It includes completed,
+failed, and cancelled tasks in the original plan. It is not remaining runtime or a
+promise that a failed plan can finish; worker limits, failures, and retry delays can
+change real execution. Current states are shown separately from the planned timings.
+
+For a chain with durations 2, 5, and 3, the bound is 10 ticks. A parallel branch joins
+at the maximum predecessor finish time, not the sum of all predecessor durations.
+The analysis uses the custom queue and hash table, taking expected O(V + E) time and
+O(V + E) extra space for V tasks and E dependencies. It uses no recursive graph walk,
+does not advance the clock, and adds no undo entry. The returned report owns its values.
 
 ## Questions worth practicing
 

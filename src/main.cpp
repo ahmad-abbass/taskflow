@@ -49,6 +49,23 @@ void printTask(const taskflow::Task& task) {
               << task.priority() << ' ' << task.attempts() << ' ' << std::quoted(task.result()) << '\n';
 }
 
+void printAnalysis(const taskflow::DependencyAnalysis& analysis) {
+    std::cout << "ANALYSIS tasks=" << analysis.tasks.size()
+              << " dependency_min_ticks=" << analysis.minimumTicks << '\n';
+    std::cout << "MODEL full_plan unlimited_workers no_failures no_retries\n";
+    std::cout << "CRITICAL_PATH";
+    for (const auto& id : analysis.criticalPath) std::cout << ' ' << std::quoted(id);
+    std::cout << '\n';
+    for (const auto& timing : analysis.tasks) {
+        std::cout << "TIMING " << std::quoted(timing.id) << ' ' << taskflow::stateName(timing.state)
+                  << " start=" << timing.earliestStart << " finish=" << timing.earliestFinish << '\n';
+        for (const auto& prerequisite : timing.unfinishedPrerequisites)
+            std::cout << "UNFINISHED " << std::quoted(timing.id) << ' ' << std::quoted(prerequisite.id)
+                      << ' ' << taskflow::stateName(prerequisite.state) << '\n';
+    }
+    std::cout << "OK analyzed " << analysis.tasks.size() << '\n';
+}
+
 }
 
 int main() {
@@ -71,6 +88,7 @@ int main() {
                 std::cout << "add ID PRIORITY KIND \"PAYLOAD\" [\"TITLE\"]\n"
                              "KIND: sum | count | flaky\n"
                              "priority ID VALUE (unstarted tasks; -1000..1000)\n"
+                             "analyze (full-plan timings, critical path, and unfinished prerequisites)\n"
                              "list [STATE]\n"
                              "STATE: waiting | ready | running | succeeded | failed | cancelled | blocked | retry_wait\n"
                              "ordered | range LOW HIGH | rank ID | select INDEX | save PATH | load PATH | undo | workers COUNT | configure ID DURATION RETRIES | step | metrics | depend ID PREREQUISITE | policy fifo|priority | next | run | show ID | cancel ID | quit\n";
@@ -135,6 +153,9 @@ int main() {
                 for (const auto& id : report.started) std::cout << "START " << std::quoted(id) << '\n';
                 for (const auto& id : report.completed) printTask(*scheduler.find(id));
                 if (!report.progressed) std::cout << "IDLE\n";
+            } else if (command == "analyze") {
+                requireEnd(input);
+                printAnalysis(scheduler.analyze());
             } else if (command == "metrics") {
                 requireEnd(input);
                 const auto metrics = scheduler.metrics();

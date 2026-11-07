@@ -1,7 +1,7 @@
 CXX ?= g++
 CPPFLAGS := -Iinclude
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror
-SOURCES := src/actions.cpp src/scheduler.cpp src/snapshot.cpp
+SOURCES := src/actions.cpp src/scheduler.cpp src/snapshot.cpp src/analysis.cpp
 
 .PHONY: all test sanitize clean demo benchmark
 all: build/taskflow
@@ -12,7 +12,7 @@ build:
 build/taskflow: $(SOURCES) src/main.cpp $(shell find include -name '*.hpp') | build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) src/main.cpp -o $@
 
-build/tests: $(SOURCES) tests/tests.cpp tests/test_support.hpp $(shell find include -name '*.hpp') | build
+build/tests: $(SOURCES) tests/tests.cpp tests/test_support.hpp tests/analysis_tests.hpp $(shell find include -name '*.hpp') | build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) tests/tests.cpp -o $@
 
 test: build/tests build/taskflow
