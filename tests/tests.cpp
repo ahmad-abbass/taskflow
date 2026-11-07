@@ -1,6 +1,7 @@
 #include "taskflow/scheduler.hpp"
 #include "test_support.hpp"
 #include "taskflow/history.hpp"
+#include "analysis_tests.hpp"
 
 #include <limits>
 #include <memory>
@@ -15,6 +16,7 @@
 
 int main() {
     Suite suite;
+    taskflow_tests::addAnalysisTests(suite);
     suite.add("priority changes preserve FIFO order, stable ties, and task indexes", [] {
         taskflow::Scheduler scheduler;
         const auto* first = &scheduler.add("first", 0, "sum", "1");

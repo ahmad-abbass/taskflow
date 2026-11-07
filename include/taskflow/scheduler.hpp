@@ -1,5 +1,6 @@
 #pragma once
 
+#include "taskflow/analysis.hpp"
 #include "taskflow/ds/linked_queue.hpp"
 #include "taskflow/registry.hpp"
 #include "taskflow/policy.hpp"
@@ -59,6 +60,7 @@ public:
     std::uint64_t clock() const noexcept { return clock_; }
     TickReport step();
     Metrics metrics() const;
+    DependencyAnalysis analyze() const;
     void addDependency(const std::string& id, const std::string& prerequisite);
     void setPolicy(const std::string& name);
     void setPriority(const std::string& id, int priority);

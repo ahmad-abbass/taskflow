@@ -95,3 +95,36 @@ assert invalid.returncode == 1 and invalid.stdout.count("ERROR ") == 6, invalid.
 assert '"keep" READY 0 0 ""' in invalid.stdout, invalid.stdout
 assert "priority ID VALUE" in help_output
 print("PASS CLI priority updates, snapshot persistence, undo, no-op history, and rejected inputs")
+
+empty = subprocess.run([binary], input="analyze\nquit\n", text=True, capture_output=True, check=True)
+assert "ANALYSIS tasks=0 dependency_min_ticks=0\n" in empty.stdout
+assert "CRITICAL_PATH\n" in empty.stdout and "OK analyzed 0\n" in empty.stdout
+
+with tempfile.TemporaryDirectory(prefix="taskflow-analysis-") as directory:
+    before = pathlib.Path(directory) / "before.snapshot"
+    after = pathlib.Path(directory) / "after.snapshot"
+    commands = (
+        'add prepare 0 sum "1"\nconfigure prepare 2 0\n'
+        'add compile 0 sum "2"\nconfigure compile 5 0\ndepend compile prepare\n'
+        'add test 0 sum "3"\nconfigure test 3 0\ndepend test compile\n'
+        f'save "{before}"\nanalyze\nsave "{after}"\npriority test 9\nanalyze\nundo\nshow test\n'
+        'run\nanalyze\nquit\n'
+    )
+    inspected = subprocess.run([binary], input=commands, text=True, capture_output=True, check=True)
+    assert before.read_bytes() == after.read_bytes(), "Analysis changed the saved session"
+    assert inspected.stdout.count("ANALYSIS tasks=3 dependency_min_ticks=10\n") == 3, inspected.stdout
+    assert 'CRITICAL_PATH "prepare" "compile" "test"\n' in inspected.stdout
+    assert 'TIMING "test" WAITING start=7 finish=10\n' in inspected.stdout
+    assert 'UNFINISHED "test" "compile" WAITING\n' in inspected.stdout
+    assert '"test" WAITING 0 0 ""\n' in inspected.stdout, "Analysis added an undo entry"
+    assert 'TIMING "test" SUCCEEDED start=7 finish=10\n' in inspected.stdout
+    assert inspected.stdout.count('UNFINISHED "test"') == 2, inspected.stdout
+    assert "MODEL full_plan unlimited_workers no_failures no_retries\n" in inspected.stdout
+
+invalid = subprocess.run([binary], input='analyze extra\nanalyze "unterminated\nanalyze\nquit\n',
+                         text=True, capture_output=True)
+assert invalid.returncode == 1 and invalid.stdout.count("ERROR ") == 2, invalid.stdout
+assert "OK analyzed 0\n" in invalid.stdout
+help_output = subprocess.run([binary], input="help\nquit\n", text=True, capture_output=True, check=True).stdout
+assert "analyze (full-plan timings, critical path, and unfinished prerequisites)" in help_output
+print("PASS CLI dependency analysis, critical paths, model assumptions, unchanged snapshots, and undo")
